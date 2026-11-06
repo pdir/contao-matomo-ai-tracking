@@ -1,0 +1,17 @@
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    Pdir\MatomoAiTrackingBundle\Config\TrackingConfig:
+        factory: ['Pdir\MatomoAiTrackingBundle\Config\TrackingConfig', 'fromEnvironment']
+
+    Pdir\MatomoAiTrackingBundle\Tracking\AiBotTracker:
+        arguments:
+            $httpClient: '@?http_client'
+
+    Pdir\MatomoAiTrackingBundle\Tracking\TrackingTargetResolver: ~
+
+    Pdir\MatomoAiTrackingBundle\EventListener\MatomoAiTrackingListener:
+        arguments:
+            $logger: '@?monolog.logger.contao.error'

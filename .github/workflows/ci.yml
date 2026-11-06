@@ -1,0 +1,103 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+    schedule:
+        # Montags 06:00 UTC: neue Abhängigkeiten und Matomos Chatbot-Liste prüfen
+        - cron: '0 6 * * 1'
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    tests:
+        name: Contao ${{ matrix.contao }} / PHP ${{ matrix.php }}${{ matrix.lowest && ' (lowest)' || '' }}
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # Niedrigste unterstützte Versionen: Contao 5.3 LTS, Symfony 6.4, FOSHttpCache 2.16, DBAL 3.7
+                    - contao: '5.3.*'
+                      php: '8.2'
+                      lowest: true
+                    # Contao 5.7, aktuelle Abhängigkeiten
+                    - contao: '5.7.*'
+                      php: '8.5'
+                      lowest: false
+                    # Niedrigste Contao-6-Kombination: Symfony 7.4, FOSHttpCache 3.1, DBAL 4.4
+                    - contao: '6.0.*'
+                      php: '8.4'
+                      lowest: true
+                    # Contao 6, aktuelle Abhängigkeiten inkl. Symfony 8
+                    - contao: '6.0.*'
+                      php: '8.5'
+                      lowest: false
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup PHP
+              uses: shivammathur/setup-php@v2
+              with:
+                  php-version: ${{ matrix.php }}
+                  extensions: dom, fileinfo, filter, gd, hash, intl, json, mbstring, pcre, pdo, zlib
+                  coverage: none
+                  tools: composer:v2
+
+            - name: Validate composer.json
+              run: composer validate --no-check-publish --no-check-lock
+
+            - name: Get Composer cache directory
+              id: composer-cache
+              run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+            - name: Cache Composer packages
+              uses: actions/cache@v4
+              with:
+                  path: ${{ steps.composer-cache.outputs.dir }}
+                  key: composer-${{ matrix.php }}-${{ matrix.contao }}-${{ matrix.lowest }}-${{ hashFiles('composer.json') }}
+                  restore-keys: composer-${{ matrix.php }}-${{ matrix.contao }}-${{ matrix.lowest }}-
+
+            - name: Pin Contao version
+              run: composer require "contao/core-bundle:${{ matrix.contao }}" --no-update --no-interaction
+
+            - name: Install dependencies
+              run: composer update --no-interaction --no-progress ${{ matrix.lowest && '--prefer-lowest --prefer-stable' || '' }}
+
+            - name: Show installed versions
+              run: composer show | grep -E '^(contao/core-bundle|contao/manager-plugin|friendsofsymfony/http-cache|symfony/http-kernel|doctrine/dbal|phpunit/phpunit) '
+
+            - name: Lint PHP files
+              run: find src contao config scripts tests -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+
+            - name: Run tests
+              run: vendor/bin/phpunit --colors=always --display-deprecations
+
+    matomo-bot-list:
+        name: Chatbot-Liste aktuell
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup PHP
+              uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.4'
+                  coverage: none
+
+            # Schlägt fehl, wenn Matomo Chatbots ergänzt oder entfernt hat.
+            # Dann lokal "composer update-user-agents" ausführen und committen.
+            - name: Compare with Matomo BotDetector
+              run: |
+                  php scripts/update-ai-user-agents.php
+                  git diff --exit-code -- config/ai_user_agents.php
